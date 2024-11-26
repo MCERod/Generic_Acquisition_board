@@ -6,7 +6,7 @@
 #define ADXL345 1
 #define A01NYUB 1
 #define SEN07024 0
-
+#define SEN0413 0
 
 #define READINGS_NUM 6
 /*******************************/
