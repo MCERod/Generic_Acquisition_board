@@ -2,8 +2,8 @@
 /****       -Defines-      ****/
 /******************************/
 
-#define MPU6050 0
-#define ADXL345 1
+#define MPU6050 1
+#define ADXL345 0
 #define A01NYUB 1
 #define SEN07024 0
 #define SEN0413 0
@@ -19,13 +19,12 @@
 #include <WiFi.h>
 #include <Wire.h>
 #include <SoftwareSerial.h>
-
-#if ADXL345
 #include <Adafruit_Sensor.h>
-#include <Adafruit_ADXL345_U.h>
+#if ADXL345
+  #include <Adafruit_ADXL345_U.h>
 #endif
 #if MPU6050
-#include <Adafruit_MPU6050.h>
+  #include <Adafruit_MPU6050.h>
 #endif
 
 /*******************************************/
@@ -48,7 +47,7 @@ hw_timer_t *timer = NULL;
 #define TIMER_INTERVAL_US 150000
 unsigned char data[4];
 int distance = 0;
-
+volatile int timer_en = 0;
 typedef struct struct_message
 {
   float ax;
@@ -57,13 +56,13 @@ typedef struct struct_message
   int distance;
   int tempo;
 } struct_message;
-
+  struct_message sensor_data;
 /********************************/
 /****       -Functions-      ****/
 /********************************/
 
 SoftwareSerial mySerial(4, 5);
-#if mpu6050
+#if MPU6050
 Adafruit_MPU6050 mpu;
 #endif
 #if ADXL345
@@ -77,7 +76,7 @@ Adafruit_SGP30 sgp;
 void setup()
 {
   Serial.begin(115200);
-
+  mySerial.begin(9600);
   Serial.println("Starting setup...");
   WiFi.mode(WIFI_STA);
   
@@ -86,6 +85,11 @@ void setup()
   if (esp_now_init() != ESP_OK)
   {
     Serial.println("Error initializing ESP-NOW");
+    while (1)
+    {
+      Serial.println("Error initializing ESP-NOW");
+    }
+    
     return;
   }
   Serial.println("ESP-NOW initialized");
@@ -97,10 +101,25 @@ void setup()
   timer = timerBegin(0, 80, true);                 // Timer 0, prescaler of 80 (1 tick = 1 µs)
   timerAttachInterrupt(timer, &onTimer, true);     // Attach ISR to the timer
   timerAlarmWrite(timer, TIMER_INTERVAL_US, true); // Set alarm interval to 150 ms
+
 }
 
 void loop()
 {
+  delay(1000);
+  Serial.println("Waiting for ESPNOW...");
+  if(timer_en == 1){
+    Serial.println("Timer enabled");
+      for (int i = 0; i < READINGS_NUM; i++)
+      {
+        read_sensor();
+      }
+      esp_err_t result = esp_now_send(requesterMAC, (uint8_t *)&sensor_data, sizeof(sensor_data));
+      timer_en = 0;
+      Serial.println("Data sent");
+      timerAlarmDisable(timer);
+  }
+
 }
 
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
@@ -112,12 +131,8 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len)
 
 void IRAM_ATTR onTimer()
 {
-  for (int i = 0; i < READINGS_NUM; i++)
-  {
-    read_sensor();
-  }
   timerAlarmDisable(timer); // Disable the timer alarm
-  esp_err_t result = esp_now_send(requesterMAC, (uint8_t *)&sensor_data, sizeof(sensor_data));
+  timer_en = 1;
 }
 
 void init_sensor()
@@ -128,7 +143,8 @@ void init_sensor()
     Serial.println("Failed to find MPU6050 chip");
     while (1)
     {
-      delay(10);
+      delay(1000);
+      Serial.println("Failed to find MPU6050 chip");
     }
   }
   Serial.println("MPU6050 Found!");
@@ -148,7 +164,7 @@ void init_sensor()
 
 void read_sensor()
 { // store sensor data in struct_message
-  struct_message sensor_data;
+
 #if MPU6050
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
@@ -172,45 +188,35 @@ void read_sensor()
 
 void ultrassonic_sensor()
 {
-  if (mySerial.available() >= 4)
-  {
-    for (int i = 0; i < 4; i++)
+    if (mySerial.available() >= 4)
     {
-      data[i] = mySerial.read();
-    }
-
-    // Check if the first byte is 0xff
-    if (data[0] == 0xff)
-    {
-      int sum = (data[0] + data[1] + data[2]) & 0x00FF;
-      if (sum == data[3])
-      {
-        distance = (data[1] << 8) + data[2];
-        if (distance > 30)
+        for (int i = 0; i < 4; i++)
         {
-          // Print the distance in millimeters
-          Serial.print("distance=");
-          Serial.print(distance);
-          Serial.println("mm");
-          //sensor_data.distance = distance;
+            data[i] = mySerial.read();
+        }
+        int sum = (data[0] + data[1] + data[2]) & 0x00FF;
+        if (sum == data[3])
+        {
+            distance = (data[1] << 8) + data[2];
+            if (distance > 280)
+            {
+                Serial.print("distance=");
+                Serial.print(distance / 10);
+                Serial.println("cm");
+            }
+            else
+            {
+                Serial.println("Below the lower limit");
+            }
         }
         else
         {
-          Serial.println("Below the lower limit");
+            Serial.println("ERROR");
         }
-      }
-      else
-      {
-        Serial.println("ERROR: Checksum mismatch");
-      }
     }
     else
     {
-      Serial.println("ERROR: Invalid start byte");
+        Serial.println("Not enough data in buffer");
     }
-  }
-  else
-  {
-    Serial.println("ERROR: Not enough data available");
-  }
+    delay(150);
 }
